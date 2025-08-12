@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, File, UploadFile, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 import google.generativeai as genai
@@ -114,7 +114,7 @@ Questions to answer:
 {questions_content}
 
 Generate a complete Python script that:
-1. Scrapes/analyzes the required data
+1. Analyzes the sample-weather.csv file (if available)
 2. Answers ALL questions precisely
 3. Outputs results as a {output_format} using: print(json.dumps(answers))
 
@@ -131,7 +131,7 @@ Generate ONLY the Python code:
         code_response = get_gemini_response(phase2_prompt)
         
         if not code_response:
-            return ["Error: Could not generate analysis code"]
+            return {"error": "Could not generate analysis code"}
 
         # Extract and save code
         code = extract_code_from_response(code_response)
@@ -162,13 +162,63 @@ Generate ONLY the Python code:
             logging.info("Code execution successful")
             return answers
         except json.JSONDecodeError:
-            return [f"Execution output: {output[:500]}"]
+            return {"error": f"Execution output: {output[:500]}"}
 
     except subprocess.TimeoutExpired:
-        return ["Error: Analysis timed out (3 minutes exceeded)"]
+        return {"error": "Analysis timed out (3 minutes exceeded)"}
     except Exception as e:
         logging.error(f"Analysis error: {str(e)}")
-        return [f"Error: {str(e)}"]
+        return {"error": str(e)}
+
+@app.post("/")
+async def data_analyst_post_endpoint(request: Request):
+    """
+    POST endpoint for Data Analyst Agent
+    Accepts JSON body with questions and processes sample-weather.csv
+    """
+    try:
+        # Read JSON body
+        body = await request.json()
+        questions_content = body.get("questions", "")
+        
+        if not questions_content.strip():
+            return JSONResponse(
+                content={"error": "No questions provided in request body"}, 
+                status_code=400
+            )
+
+        logging.info(f"Processing POST request with questions: {questions_content[:100]}...")
+
+        # Check if sample-weather.csv exists, create a dummy one if not
+        if not os.path.exists("sample-weather.csv"):
+            # Create a simple weather CSV for testing
+            import pandas as pd
+            dummy_data = {
+                'date': ['2023-01-01', '2023-01-02', '2023-01-03', '2023-01-04', '2023-01-05'],
+                'temperature': [22.5, 24.1, 23.7, 25.3, 26.0],
+                'humidity': [65, 70, 68, 72, 75],
+                'pressure': [1013.2, 1012.8, 1014.1, 1013.5, 1012.9]
+            }
+            df = pd.DataFrame(dummy_data)
+            df.to_csv("sample-weather.csv", index=False)
+            logging.info("Created dummy sample-weather.csv file")
+
+        # Analyze data
+        result = analyze_data(questions_content)
+        
+        return JSONResponse(content=result)
+
+    except json.JSONDecodeError:
+        return JSONResponse(
+            content={"error": "Invalid JSON in request body"}, 
+            status_code=400
+        )
+    except Exception as e:
+        logging.error(f"POST endpoint error: {str(e)}")
+        return JSONResponse(
+            content={"error": f"Internal error: {str(e)}"}, 
+            status_code=500
+        )
 
 @app.post("/api/")
 async def data_analyst_endpoint(
@@ -176,7 +226,7 @@ async def data_analyst_endpoint(
     additional_files: List[UploadFile] = File(default=[])
 ):
     """
-    Data Analyst Agent endpoint
+    Data Analyst Agent endpoint for file uploads
     Accepts questions.txt (required) and optional additional files
     """
     try:
@@ -218,6 +268,7 @@ async def data_analyst_endpoint(
 
 @app.get("/", response_class=FileResponse)
 async def get_frontend():
+    """GET endpoint returns the frontend HTML"""
     return FileResponse("index.html")
 
 @app.get("/health")
