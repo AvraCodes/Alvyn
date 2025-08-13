@@ -387,13 +387,40 @@ async def data_analyst_post_endpoint(request: Request):
             try:
                 form = await request.form()
                 if form is not None:
-                    questions_content = (form.get("questions") or 
-                                       form.get("question") or 
-                                       form.get("query") or 
-                                       form.get("text") or
-                                       form.get("prompt"))
+                    logging.info(f"Form keys: {list(form.keys())}")
+                    
+                    # Look for questions.txt file first (evaluation format)
+                    questions_file = form.get("questions.txt")
+                    if questions_file and hasattr(questions_file, 'read'):
+                        content = await questions_file.read()
+                        questions_content = content.decode('utf-8', errors='ignore').strip()
+                        logging.info(f"Found questions.txt file with {len(questions_content)} chars")
+                    
+                    # If no file, look for text fields
+                    if not questions_content:
+                        questions_content = (form.get("questions") or 
+                                           form.get("question") or 
+                                           form.get("query") or 
+                                           form.get("text") or
+                                           form.get("prompt"))
+                        if questions_content:
+                            questions_content = str(questions_content)
+                            logging.info(f"Found text field with {len(questions_content)} chars")
+                    
+                    # Process additional files if any
+                    for key, file in form.items():
+                        if key != "questions.txt" and hasattr(file, 'filename') and file.filename:
+                            try:
+                                content = await file.read()
+                                with open(file.filename, "wb") as f:
+                                    f.write(content)
+                                logging.info(f"Saved additional file: {file.filename}")
+                            except Exception as file_e:
+                                logging.error(f"Error saving file {file.filename}: {file_e}")
+                                
                 else:
                     logging.warning("Form data is None")
+                    
             except Exception as form_e:
                 logging.error(f"Form parsing error: {form_e}")
                 # Fallback to raw body
@@ -407,6 +434,8 @@ async def data_analyst_post_endpoint(request: Request):
                                        form.get("question") or 
                                        form.get("query") or 
                                        form.get("text"))
+                    if questions_content:
+                        questions_content = str(questions_content)
             except Exception as form_e:
                 logging.error(f"Form parsing error: {form_e}")
                 questions_content = raw_body.decode('utf-8', errors='ignore').strip()
@@ -418,7 +447,11 @@ async def data_analyst_post_endpoint(request: Request):
                 logging.error(f"Decode error: {decode_e}")
                 questions_content = str(raw_body)
         
-        logging.info(f"Extracted questions: {questions_content[:200]}...")
+        # Ensure questions_content is never None
+        if questions_content is None:
+            questions_content = ""
+            
+        logging.info(f"Extracted questions: {str(questions_content)[:200]}...")
         
         # If we still don't have content, return a specific error
         if not questions_content or not str(questions_content).strip():
@@ -434,7 +467,7 @@ async def data_analyst_post_endpoint(request: Request):
             )
 
         # Check if this looks like a sales analysis request
-        if "sample-sales" in questions_content.lower() or "sales" in questions_content.lower():
+        if "sample-sales" in str(questions_content).lower() or "sales" in str(questions_content).lower():
             # Create the evaluation sales data
             create_evaluation_sales_data()
             
@@ -759,13 +792,40 @@ async def data_analyst_post_endpoint(request: Request):
             try:
                 form = await request.form()
                 if form is not None:
-                    questions_content = (form.get("questions") or 
-                                       form.get("question") or 
-                                       form.get("query") or 
-                                       form.get("text") or
-                                       form.get("prompt"))
+                    logging.info(f"Form keys: {list(form.keys())}")
+                    
+                    # Look for questions.txt file first (evaluation format)
+                    questions_file = form.get("questions.txt")
+                    if questions_file and hasattr(questions_file, 'read'):
+                        content = await questions_file.read()
+                        questions_content = content.decode('utf-8', errors='ignore').strip()
+                        logging.info(f"Found questions.txt file with {len(questions_content)} chars")
+                    
+                    # If no file, look for text fields
+                    if not questions_content:
+                        questions_content = (form.get("questions") or 
+                                           form.get("question") or 
+                                           form.get("query") or 
+                                           form.get("text") or
+                                           form.get("prompt"))
+                        if questions_content:
+                            questions_content = str(questions_content)
+                            logging.info(f"Found text field with {len(questions_content)} chars")
+                    
+                    # Process additional files if any
+                    for key, file in form.items():
+                        if key != "questions.txt" and hasattr(file, 'filename') and file.filename:
+                            try:
+                                content = await file.read()
+                                with open(file.filename, "wb") as f:
+                                    f.write(content)
+                                logging.info(f"Saved additional file: {file.filename}")
+                            except Exception as file_e:
+                                logging.error(f"Error saving file {file.filename}: {file_e}")
+                                
                 else:
                     logging.warning("Form data is None")
+                    
             except Exception as form_e:
                 logging.error(f"Form parsing error: {form_e}")
                 # Fallback to raw body
@@ -779,6 +839,8 @@ async def data_analyst_post_endpoint(request: Request):
                                        form.get("question") or 
                                        form.get("query") or 
                                        form.get("text"))
+                    if questions_content:
+                        questions_content = str(questions_content)
             except Exception as form_e:
                 logging.error(f"Form parsing error: {form_e}")
                 questions_content = raw_body.decode('utf-8', errors='ignore').strip()
@@ -790,7 +852,11 @@ async def data_analyst_post_endpoint(request: Request):
                 logging.error(f"Decode error: {decode_e}")
                 questions_content = str(raw_body)
         
-        logging.info(f"Extracted questions: {questions_content[:200]}...")
+        # Ensure questions_content is never None
+        if questions_content is None:
+            questions_content = ""
+            
+        logging.info(f"Extracted questions: {str(questions_content)[:200]}...")
         
         # If we still don't have content, return a specific error
         if not questions_content or not str(questions_content).strip():
@@ -806,7 +872,7 @@ async def data_analyst_post_endpoint(request: Request):
             )
 
         # Check if this looks like a sales analysis request
-        if "sample-sales" in questions_content.lower() or "sales" in questions_content.lower():
+        if "sample-sales" in str(questions_content).lower() or "sales" in str(questions_content).lower():
             # Create the evaluation sales data
             create_evaluation_sales_data()
             
