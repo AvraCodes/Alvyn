@@ -1,7 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
-import google.generativeai as genai
 import os
 import json
 import subprocess
@@ -11,7 +10,7 @@ from typing import List
 from dotenv import load_dotenv
 import pandas as pd
 import glob
-import numpy as np  # Add this import at the top
+import numpy as np
 from io import BytesIO
 import base64
 import requests
@@ -30,18 +29,12 @@ app.add_middleware(
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-def create_sample_data():
-    """Do not create any hardcoded sample data - work only with uploaded files"""
-    # Removed all hardcoded data creation
-    # The system should work entirely with files uploaded via the API
-    pass
-
 def detect_available_data_files():
     """Detect all available data files in the directory"""
     data_files = []
     
     # Common data file extensions
-    extensions = ['*.csv', '*.json', '*.xlsx', '*.xls', '*.tsv', '*.txt', '*.parquet']
+    extensions = ['*.csv', '*.json', '*.xlsx', '*.xls', '*.tsv', '*.txt', '*.parquet', '*.png', '*.jpg', '*.jpeg', '*.gif']
     
     for ext in extensions:
         files = glob.glob(ext)
@@ -50,15 +43,15 @@ def detect_available_data_files():
     return data_files
 
 def analyze_file_structure(filename):
-    """Analyze the structure of a data file with more sample data"""
+    """Analyze the structure of a data file"""
     try:
         if filename.endswith('.csv'):
             df = pd.read_csv(filename)
             return {
                 'type': 'CSV',
                 'columns': list(df.columns),
-                'shape': f"{len(df)} rows",
-                'sample_data': df.head(5).to_dict('records')  # Get 5 sample records
+                'shape': f"{len(df)} rows x {len(df.columns)} columns",
+                'sample_data': df.head(3).to_dict('records')
             }
         elif filename.endswith('.json'):
             with open(filename, 'r') as f:
@@ -68,27 +61,27 @@ def analyze_file_structure(filename):
                         'type': 'JSON Array',
                         'columns': list(data[0].keys()) if isinstance(data[0], dict) else 'N/A',
                         'shape': f"{len(data)} records",
-                        'sample_data': data[:5]  # Get 5 sample records
+                        'sample_data': data[:3]
                     }
                 else:
                     return {
                         'type': 'JSON Object',
                         'structure': str(type(data)),
-                        'sample_data': data if len(str(data)) < 1000 else str(data)[:1000]
+                        'sample_data': str(data)[:500] if len(str(data)) > 500 else data
                     }
         elif filename.endswith(('.xlsx', '.xls')):
             df = pd.read_excel(filename)
             return {
                 'type': 'Excel',
                 'columns': list(df.columns),
-                'shape': f"{len(df)} rows",
-                'sample_data': df.head(5).to_dict('records')
+                'shape': f"{len(df)} rows x {len(df.columns)} columns",
+                'sample_data': df.head(3).to_dict('records')
             }
         elif filename.endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
             return {
                 'type': 'Image',
                 'filename': filename,
-                'sample_data': f"Image file: {filename}"
+                'description': f"Image file: {filename}"
             }
         elif filename.endswith('.txt'):
             with open(filename, 'r', encoding='utf-8', errors='ignore') as f:
@@ -96,10 +89,10 @@ def analyze_file_structure(filename):
                 return {
                     'type': 'Text',
                     'size': f"{len(content)} characters",
-                    'sample_data': content[:500] if len(content) > 500 else content
+                    'sample_content': content[:300] if len(content) > 300 else content
                 }
         else:
-            return {'type': 'Unknown', 'filename': filename, 'sample_data': f"File: {filename}"}
+            return {'type': 'Unknown', 'filename': filename}
     except Exception as e:
         return {'type': 'Error', 'error': str(e), 'filename': filename}
 
@@ -123,11 +116,11 @@ def extract_code_from_response(response_text: str) -> str:
 def get_aipipe_response(prompt: str) -> str:
     """Get response from AIPipe/OpenRouter with proper error handling"""
     try:
-        api_key = os.getenv("OPENAI_API_KEY")  # This is your AIPipe token
+        api_key = os.getenv("OPENAI_API_KEY")  # Read from environment
         api_base = os.getenv("OPENAI_API_BASE", "https://aipipe.org/openrouter/v1")
         
         if not api_key:
-            logging.error("OPENAI_API_KEY (AIPipe token) not found")
+            logging.error("OPENAI_API_KEY not found in environment variables")
             return ""
         
         headers = {
@@ -135,9 +128,9 @@ def get_aipipe_response(prompt: str) -> str:
             "Content-Type": "application/json"
         }
         
-        # Use Claude 3.5 Sonnet - much better for code generation and analysis
+        # Use openai/gpt-4.1-nano as requested
         data = {
-            "model": "anthropic/claude-3.5-sonnet",  # Changed back to Claude
+            "model": "openai/gpt-4.1-nano",
             "messages": [
                 {
                     "role": "user", 
@@ -173,161 +166,6 @@ def get_aipipe_response(prompt: str) -> str:
         logging.error(f"AIPipe API error: {str(e)}")
         return ""
 
-def analyze_data(questions_content: str, additional_files: List[UploadFile] = None):
-    """Main data analysis function - just calls the LLM-first approach"""
-    return analyze_data_with_direct_llm(questions_content, additional_files)
-
-def analyze_data_with_direct_llm(questions_content: str, additional_files: List[UploadFile] = None):
-    """Enhanced analysis that tries direct LLM answers first, then fallback to code generation"""
-    try:
-        # Detect available files (both uploaded and existing) - NO sample data creation
-        available_files = detect_available_data_files()
-        
-        # Work with whatever files are actually available, don't create fake data
-        if not available_files:
-            logging.info("No data files available - proceeding with questions-only analysis")
-            
-            # Try direct LLM response without data
-            direct_prompt = f"""
-You are a data analyst agent. Answer the following questions using your knowledge:
-
-Questions to answer:
-{questions_content}
-
-INSTRUCTIONS:
-1. If these questions can be answered with general knowledge, provide direct answers in the requested JSON format
-2. If specific data files are mentioned that you don't have access to, respond with exactly: "NEED_DATA_FILES"
-3. If you need to perform calculations on actual data, respond with exactly: "NEED_CODE_ANALYSIS"
-
-Response:
-"""
-            
-            direct_response = get_aipipe_response(direct_prompt)
-            
-            if direct_response and "NEED_DATA_FILES" in direct_response:
-                return {"error": "Required data files not provided"}
-            elif direct_response and "NEED_CODE_ANALYSIS" in direct_response:
-                return {"error": "Cannot generate code without data files"}
-            else:
-                # Try to parse as JSON
-                try:
-                    clean_response = direct_response.strip()
-                    if clean_response.startswith('```json'):
-                        clean_response = clean_response.replace('```json', '').replace('```', '').strip()
-                    elif clean_response.startswith('```'):
-                        clean_response = clean_response.replace('```', '').strip()
-
-                    if clean_response.startswith('[') or clean_response.startswith('{'):
-                        return json.loads(clean_response)
-                except json.JSONDecodeError:
-                    pass
-                
-                return {"error": "No data files available for analysis"}
-
-        # Continue with files that were actually uploaded...
-        # Analyze file structures and get sample data for Phase 1
-        file_summaries = []
-        file_contents = {}
-        
-        for file in available_files:
-            analysis = analyze_file_structure(file)
-            summary = f"- {file}: {analysis.get('type', 'Unknown')}"
-            if 'shape' in analysis:
-                summary += f" ({analysis['shape']})"
-            if 'columns' in analysis:
-                summary += f", columns: {analysis['columns'][:5]}"  # First 5 columns
-            file_summaries.append(summary)
-            
-            # Get sample data for LLM context
-            if analysis.get('sample_data'):
-                file_contents[file] = analysis['sample_data']
-
-        # Read system prompt
-        try:
-            with open("prompt.txt", "r") as f:
-                system_prompt = f.read()
-        except FileNotFoundError:
-            system_prompt = """You are a data analyst agent. Answer questions accurately using your knowledge and available data context."""
-
-        # Build comprehensive context for LLM including file contents
-        file_context = []
-        for file in available_files:
-            if file in file_contents:
-                file_context.append(f"\n{file} sample data:")
-                if isinstance(file_contents[file], list):
-                    # Show first few records for arrays
-                    for i, record in enumerate(file_contents[file][:3]):
-                        file_context.append(f"  Record {i+1}: {record}")
-                else:
-                    file_context.append(f"  {file_contents[file]}")
-
-        # Phase 1: Direct LLM Response with file contents
-        direct_prompt = f"""
-{system_prompt}
-
-Available data files:
-{chr(10).join(file_summaries)}
-
-Sample data from files:
-{chr(10).join(file_context)}
-
-Questions to answer:
-{questions_content}
-
-INSTRUCTIONS:
-1. Use the sample data provided above to answer questions if possible
-2. For simple questions about data structure, counts, or basic analysis, provide direct answers
-3. If you can answer all questions with confidence using the sample data, respond with ONLY the requested JSON format
-4. If you need to analyze complete datasets, generate visualizations, or perform complex calculations, respond with exactly: "NEED_CODE_ANALYSIS"
-
-Determine the expected response format from the questions:
-- If questions ask for a JSON object with specific keys, return a JSON object
-- If questions ask for a JSON array, return a JSON array  
-- If questions mention specific metrics, include those exact keys
-
-Response:
-"""
-
-        logging.info("Phase 1: Attempting direct LLM response with file contents")
-        direct_response = get_aipipe_response(direct_prompt)
-        
-        if not direct_response:
-            logging.warning("No response from LLM, proceeding to code generation")
-            return generate_code_analysis(questions_content, available_files, system_prompt)
-
-        logging.info(f"Direct LLM response: {direct_response[:200]}...")
-
-        # Check if LLM indicated it needs code analysis
-        if "NEED_CODE_ANALYSIS" in direct_response:
-            logging.info("LLM requested code analysis, proceeding to Phase 2")
-            return generate_code_analysis(questions_content, available_files, system_prompt)
-
-        # Try to parse as JSON (successful direct answer)
-        try:
-            # Clean the response - remove any markdown formatting
-            clean_response = direct_response.strip()
-            if clean_response.startswith('```json'):
-                clean_response = clean_response.replace('```json', '').replace('```', '').strip()
-            elif clean_response.startswith('```'):
-                clean_response = clean_response.replace('```', '').strip()
-
-            # Parse the JSON
-            if clean_response.startswith('[') or clean_response.startswith('{'):
-                answers = json.loads(clean_response)
-                logging.info("Phase 1 successful - returning direct LLM answers")
-                return answers
-            else:
-                logging.info("Response not in JSON format, proceeding to code generation")
-                return generate_code_analysis(questions_content, available_files, system_prompt)
-                
-        except json.JSONDecodeError as e:
-            logging.info(f"JSON parsing failed: {e}, proceeding to code generation")
-            return generate_code_analysis(questions_content, available_files, system_prompt)
-
-    except Exception as e:
-        logging.error(f"Direct LLM analysis error: {str(e)}")
-        return {"error": str(e)}
-
 def json_serializable(obj):
     """Convert numpy/pandas types to JSON serializable types"""
     if hasattr(obj, 'item'):
@@ -347,30 +185,13 @@ def json_serializable(obj):
     else:
         return obj
 
-def safe_json_dumps(obj):
-    """Safely convert object to JSON string with numpy type handling"""
-    def convert_types(obj):
-        if isinstance(obj, dict):
-            return {k: convert_types(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [convert_types(item) for item in obj]
-        elif isinstance(obj, (np.integer, np.int64, np.int32)):
-            return int(obj)
-        elif isinstance(obj, (np.floating, np.float64, np.float32)):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif hasattr(obj, 'item'):
-            return obj.item()
-        else:
-            return obj
-    
-    return json.dumps(convert_types(obj))
-
-def generate_code_analysis(questions_content: str, available_files: List, system_prompt: str):
-    """Generate and execute Python code for complex analysis"""
+def analyze_data(questions_content: str):
+    """Main data analysis function - always generates and executes code"""
     try:
-        logging.info("Phase 2: Generating Python code for analysis")
+        logging.info("Starting code generation for analysis")
+        
+        # Detect available files
+        available_files = detect_available_data_files()
         
         # Get detailed file analysis for code generation
         file_analysis = {}
@@ -380,15 +201,24 @@ def generate_code_analysis(questions_content: str, available_files: List, system
         # Create detailed file descriptions
         file_descriptions = []
         for file, analysis in file_analysis.items():
-            desc = f"- {file}: {analysis.get('type', 'Unknown')} with {analysis.get('shape', 'unknown size')}"
+            desc = f"- {file}: {analysis.get('type', 'Unknown')}"
+            if 'shape' in analysis:
+                desc += f" ({analysis['shape']})"
             if 'columns' in analysis:
                 desc += f", columns: {analysis['columns']}"
             file_descriptions.append(desc)
 
-        # Determine output format
-        is_json_object = ("respond with a JSON object" in questions_content.lower() or 
-                         "return a JSON object" in questions_content.lower() or
-                         "json object with keys" in questions_content.lower())
+        # Read system prompt
+        try:
+            with open("prompt.txt", "r") as f:
+                system_prompt = f.read()
+        except FileNotFoundError:
+            system_prompt = """You are a data analyst agent. Generate Python code to analyze data and answer questions accurately."""
+
+        # Determine output format from questions
+        is_json_object = ("JSON object" in questions_content or 
+                         "json object" in questions_content.lower() or
+                         "return a JSON object" in questions_content.lower())
         output_format = "JSON object" if is_json_object else "JSON array"
 
         code_prompt = f"""
@@ -404,19 +234,21 @@ Questions to answer:
 {questions_content}
 
 Generate a complete Python script that:
-1. Loads ALL available data files automatically
+1. Loads ALL available data files automatically using the exact filenames shown above
 2. Performs the requested analysis precisely
 3. Outputs results as a {output_format} using: print(json.dumps(result))
 
 Requirements:
-- Import: pandas, numpy, json, matplotlib, seaborn, scipy, glob, base64, io
-- Do NOT import networkx - use pandas/collections for any graph analysis
-- Handle different file formats (CSV, JSON, Excel)
-- For plots: return base64 PNG data URI under 100KB
+- Import: pandas, numpy, json, matplotlib, seaborn, scipy, glob, base64, io, requests
+- Handle different file formats (CSV, JSON, Excel, Images, Text)
+- For plots: return base64 PNG data URI starting with "data:image/png;base64," under 100KB
 - Use try/except blocks for error handling
 - Make calculations robust and accurate
 - Convert numpy types to Python native types before JSON serialization
+- For web scraping: use pandas.read_html() for Wikipedia tables or requests + BeautifulSoup
 - Always output valid JSON at the end
+- Handle missing data gracefully
+- Use exact column names and file names as provided
 
 Generate ONLY the Python code:
 """
@@ -430,12 +262,6 @@ Generate ONLY the Python code:
         code = extract_code_from_response(code_response)
         if not code:
             code = code_response
-
-        # Handle network analysis specifically
-        if ("edges.csv" in [f.lower() for f in available_files]) or ("network" in questions_content.lower()):
-            if "networkx" in code.lower():
-                logging.warning("Replacing networkx with pure Python implementation")
-                code = get_pure_python_network_code()
 
         # Enhanced code with imports and error handling
         enhanced_code = f"""
@@ -452,6 +278,11 @@ import base64
 from io import BytesIO
 import warnings
 from collections import defaultdict, deque
+import requests
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    pass
 warnings.filterwarnings('ignore')
 
 def convert_numpy_types(obj):
@@ -505,121 +336,12 @@ except Exception as e:
         logging.error(f"Code generation error: {str(e)}")
         return {"error": str(e)}
 
-def get_pure_python_network_code():
-    """Pure Python network analysis code without networkx - with JSON serialization fix"""
-    return """
-import pandas as pd
-import json
-from collections import defaultdict, deque
-
-def convert_numpy_types(obj):
-    \"\"\"Convert numpy types to JSON serializable types\"\"\"
-    if isinstance(obj, dict):
-        return {k: convert_numpy_types(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_numpy_types(item) for item in obj]
-    elif hasattr(obj, 'dtype'):  # pandas/numpy types
-        if 'int' in str(obj.dtype):
-            return int(obj)
-        elif 'float' in str(obj.dtype):
-            return float(obj)
-        else:
-            return str(obj)
-    elif hasattr(obj, 'item'):
-        return obj.item()
-    else:
-        return obj
-
-# Load edges data with flexible column detection
-edges_df = pd.read_csv('edges.csv')
-cols = [c.lower() for c in edges_df.columns]
-
-# Detect source/target columns
-source_col = None
-target_col = None
-
-for col in edges_df.columns:
-    col_lower = col.lower()
-    if col_lower in ['source', 'from', 'node1', 'u', 'start']:
-        source_col = col
-    elif col_lower in ['target', 'to', 'node2', 'v', 'end']:
-        target_col = col
-
-if source_col is None or target_col is None:
-    source_col = edges_df.columns[0]
-    target_col = edges_df.columns[1]
-
-# Build undirected graph
-graph = defaultdict(set)
-nodes = set()
-
-for _, row in edges_df.iterrows():
-    u, v = row[source_col], row[target_col]
-    graph[u].add(v)
-    graph[v].add(u)
-    nodes.add(u)
-    nodes.add(v)
-
-# Calculate metrics
-edge_count = len(edges_df)
-node_count = len(nodes)
-degrees = {n: len(graph[n]) for n in nodes}
-highest_degree_node = str(max(degrees, key=degrees.get)) if degrees else ""
-average_degree = sum(degrees.values()) / len(degrees) if degrees else 0.0
-max_edges = node_count * (node_count - 1) / 2 if node_count > 1 else 0
-density = edge_count / max_edges if max_edges > 0 else 0.0
-
-def bfs_shortest_path(start, end):
-    if start == end: return 0
-    if start not in nodes or end not in nodes: return -1
-    
-    queue = deque([(start, 0)])
-    visited = {start}
-    
-    while queue:
-        node, dist = queue.popleft()
-        for neighbor in graph[node]:
-            if neighbor == end: return dist + 1
-            if neighbor not in visited:
-                visited.add(neighbor)
-                queue.append((neighbor, dist + 1))
-    return -1
-
-# Find specific nodes or use first two
-alice = next((n for n in nodes if str(n).lower() in ['alice', 'a']), None)
-bob = next((n for n in nodes if str(n).lower() in ['bob', 'b']), None)
-
-if not alice or not bob:
-    node_list = list(nodes)
-    alice = node_list[0] if node_list else ""
-    bob = node_list[1] if len(node_list) > 1 else alice
-
-result = {
-    "edge_count": int(edge_count),
-    "highest_degree_node": str(highest_degree_node),
-    "average_degree": float(round(average_degree, 6)),
-    "density": float(round(density, 6)),
-    "shortest_path_alice_bob": int(bfs_shortest_path(alice, bob)) if alice != bob else 0
-}
-
-# Ensure all values are JSON serializable
-result = convert_numpy_types(result)
-print(json.dumps(result))
-"""
-
-# Update the main functions
-def analyze_data_with_fallback(questions_content: str, additional_files: List[UploadFile] = None):
-    """Main analysis function - prioritizes direct LLM answers"""
-    return analyze_data_with_direct_llm(questions_content, additional_files)
-
-# Update the POST endpoint to use the new approach
 @app.post("/")
 async def data_analyst_post_endpoint(request: Request):
     """
-    POST endpoint with LLM-first approach
+    POST endpoint that always generates code for analysis
     """
     try:
-        # Get the raw body first for debugging
         raw_body = await request.body()
         content_type = request.headers.get("content-type", "").lower()
         
@@ -627,6 +349,7 @@ async def data_analyst_post_endpoint(request: Request):
         logging.info(f"Raw body length: {len(raw_body)}")
         
         questions_content = ""
+        uploaded_files = []
         
         # Handle different content types
         if "application/json" in content_type:
@@ -657,6 +380,7 @@ async def data_analyst_post_endpoint(request: Request):
                 if form is not None:
                     logging.info(f"Form keys: {list(form.keys())}")
                     
+                    # Extract questions.txt
                     questions_file = form.get("questions.txt")
                     if questions_file and hasattr(questions_file, 'read'):
                         content = await questions_file.read()
@@ -672,14 +396,15 @@ async def data_analyst_post_endpoint(request: Request):
                         if questions_content:
                             questions_content = str(questions_content)
                     
-                    # Process additional files
+                    # Process ALL additional files (data.csv, image.png, etc.)
                     for key, file in form.items():
                         if key != "questions.txt" and hasattr(file, 'filename') and file.filename:
                             try:
                                 content = await file.read()
                                 with open(file.filename, "wb") as f:
                                     f.write(content)
-                                logging.info(f"Saved additional file: {file.filename}")
+                                uploaded_files.append(file.filename)
+                                logging.info(f"Saved uploaded file: {file.filename} ({len(content)} bytes)")
                             except Exception as file_e:
                                 logging.error(f"Error saving file {file.filename}: {file_e}")
                                 
@@ -701,6 +426,7 @@ async def data_analyst_post_endpoint(request: Request):
             questions_content = ""
             
         logging.info(f"Extracted questions: {str(questions_content)[:200]}...")
+        logging.info(f"Uploaded files: {uploaded_files}")
         
         if not questions_content or not str(questions_content).strip():
             logging.warning("No questions content found")
@@ -708,13 +434,14 @@ async def data_analyst_post_endpoint(request: Request):
                 content={
                     "error": "No questions found in request", 
                     "content_type": content_type,
-                    "body_length": len(raw_body)
+                    "body_length": len(raw_body),
+                    "uploaded_files": uploaded_files
                 }, 
                 status_code=400
             )
 
-        # Use LLM-first analysis approach
-        result = analyze_data_with_fallback(str(questions_content))
+        # Always use code generation approach
+        result = analyze_data(str(questions_content))
         
         # Ensure result is JSON serializable before returning
         safe_result = json_serializable(result)
@@ -727,3 +454,9 @@ async def data_analyst_post_endpoint(request: Request):
             content={"error": f"Internal error: {str(e)}"}, 
             status_code=500
         )
+
+# Serve the frontend HTML file
+@app.get("/")
+async def serve_frontend():
+    """Serve the frontend HTML file"""
+    return FileResponse("index.html")
