@@ -9,7 +9,7 @@ CODE GENERATION REQUIREMENTS
 Write a **complete, working, self-contained Python 3 script** that:
 
 GENERAL RULES  
-- Imports only necessary libraries (`pandas`, `numpy`, `matplotlib`, `scipy`, `requests`, `bs4`, `re`, `fuzzywuzzy`, etc.).  
+- Imports only necessary libraries (`pandas`, `numpy`, `matplotlib`, `scipy`, `requests`, `bs4`, `re`, `difflib`, etc.).  
 - Reads input files **exactly** by the names provided in the question file.  
 - Scrapes web data when required.  
 - **For ANY website**:  
@@ -20,29 +20,45 @@ GENERAL RULES
      ```python
      soup.find_all('div', class_=re.compile('price', re.I))
      ```  
-  5. If no exact keyword match, use fuzzy matching (`difflib.get_close_matches` or `fuzzywuzzy`) to pick the closest match.  
+  5. If no exact keyword match, use fuzzy matching (`difflib.get_close_matches`) to pick the closest match.  
   6. Always confirm the selected element/table contains expected data before processing.  
+- For Wikipedia: always use `pandas.read_html(url)` and select the correct table by matching column headers to the question requirements.  
 - Cleans and processes data accurately before computing answers.  
 - Computes all requested metrics (e.g., edge count, highest degree node, average degree, density, shortest path).  
 - Generates requested plots matching the described styles exactly (e.g., green bars, labelled nodes, red dotted regression line).  
 - Each plot must be a separate `matplotlib` figure (no seaborn unless explicitly stated).  
 
-- Scrapes web data when required.  
-  - For Wikipedia: always use `pandas.read_html(url)` and select the correct table by matching column headers to the question requirements.  
-- Cleans and processes data accurately before computing answers.  
-- Computes all requested metrics (e.g., edge count, highest degree node, average degree, density, shortest path).  
-- Generates requested plots matching the described styles exactly (e.g., green bars, labelled nodes, red dotted regression line).  
-- Each plot must be a separate `matplotlib` figure (no seaborn unless explicitly stated).  
-- Encodes plots to base64 PNG strings (under 100 kB) using:  
-  ```python
-  import base64
-  from io import BytesIO
-  buffer = BytesIO()
-  plt.savefig(buffer, format="png", bbox_inches="tight")
-  buffer.seek(0)
-  b64 = base64.b64encode(buffer.read()).decode("utf-8")
-  data_uri = "data:image/png;base64," + b64
-  ```
+**CRITICAL: BASE64 IMAGE ENCODING**
+For ALL plots, use this EXACT code pattern:
+```python
+import matplotlib.pyplot as plt
+import base64
+from io import BytesIO
+
+# Create your plot
+plt.figure(figsize=(10, 6))
+# ... your plotting code here ...
+plt.title('Your Title')
+plt.xlabel('X Label')
+plt.ylabel('Y Label')
+
+# Convert to base64 - ESSENTIAL STEPS:
+buffer = BytesIO()
+plt.savefig(buffer, format='png', bbox_inches='tight', dpi=80, facecolor='white')
+plt.close()  # IMPORTANT: Close the figure to free memory
+buffer.seek(0)
+image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+buffer.close()  # IMPORTANT: Close the buffer
+plot_data_uri = f"data:image/png;base64,{image_base64}"
+```
+
+**IMAGE REQUIREMENTS:**
+- Always use `facecolor='white'` for clean backgrounds
+- Always use `dpi=80` to keep file size under 100KB
+- Always call `plt.close()` after saving to prevent memory issues
+- Always call `buffer.close()` to free resources
+- Format: `f"data:image/png;base64,{image_base64}"` (note the comma after base64)
+
 - Outputs the final result as valid JSON using `print(json.dumps(result))`
 - Handles errors gracefully with try/except blocks
 - Converts all numpy/pandas types to native Python types before JSON serialization
@@ -65,5 +81,20 @@ GENERALIZATION PRINCIPLES
 - Use flexible column detection for common patterns (e.g., source/target for networks)
 - Handle missing data and edge cases gracefully
 - Make code robust to different data sizes and types
+
+**DATA CLEANING FOR WEB SCRAPING:**
+When processing scraped data (especially Wikipedia tables):
+```python
+# Clean numeric columns that might have footnotes like "2.8[1]" or "$2.847 billion"
+def clean_numeric_column(series):
+    return (series.astype(str)
+            .str.replace(r'\[.*?\]', '', regex=True)  # Remove footnotes [1], [2]
+            .str.replace(r'[^\d\.]', '', regex=True)  # Keep only digits and dots
+            .str.extract(r'([\d\.]+)')[0]  # Extract the numeric part
+            .astype(float))
+
+# Example usage:
+df['gross_clean'] = clean_numeric_column(df['Worldwide gross'])
+```
 
 Generate ONLY the Python code that accomplishes these tasks.
